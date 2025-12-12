@@ -50,4 +50,14 @@ build_script:
       nmake install
 
 artifacts:
-  - path: install\*
+  - path: install\Win32-static
+    name: Win32-static
+
+  - path: install\Win32-shared
+    name: Win32-shared
+
+  - path: install\Win64-static
+    name: Win64-static
+
+  - path: install\Win64-shared
+    name: Win64-shared
