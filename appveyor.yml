@@ -31,6 +31,10 @@ build_script:
       echo ===== %NAME% =====
       echo Shell: %COMSPEC%
 
+      rem === FORCE STRAWBERRY PERL ===
+      set PATH=C:\Strawberry\perl\bin;%PATH%
+      perl -v
+      
       if "%ARCH%"=="x86" call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86
       if "%ARCH%"=="x64" call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
 
