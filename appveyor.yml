@@ -28,6 +28,8 @@ install:
 
 build_script:
   - cmd: |
+      echo ===== %NAME% =====
+
       if "%ARCH%"=="x86" (
         call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86
       ) else (
@@ -35,6 +37,8 @@ build_script:
       )
 
       set INSTALL_DIR=%APPVEYOR_BUILD_FOLDER%\install\%NAME%
+      mkdir "%INSTALL_DIR%"
+
       perl Configure %CONFIG% %SHARED% --prefix="%INSTALL_DIR%" no-makedepend
       nmake
       nmake install
