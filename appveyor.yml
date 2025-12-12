@@ -34,7 +34,11 @@ build_script:
       rem === FORCE STRAWBERRY PERL ===
       set PATH=C:\Strawberry\perl\bin;%PATH%
       perl -v
-      
+
+      rem === FORCE NASM ===
+      set PATH=C:\Program Files\NASM;%PATH%
+      nasm -v
+
       if "%ARCH%"=="x86" call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86
       if "%ARCH%"=="x64" call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
 
