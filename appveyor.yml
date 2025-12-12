@@ -29,6 +29,8 @@ install:
 build_script:
   - cmd: |
       echo ===== %NAME% =====
+      
+      echo Shell: %COMSPEC%
 
       if "%ARCH%"=="x86" (
         call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86
