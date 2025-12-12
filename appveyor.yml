@@ -23,8 +23,8 @@ environment:
       SHARED: shared
 
 install:
-  - choco install nasm strawberryperl -y
-  - set PATH=C:\Strawberry\perl\bin;%PATH%
+  - choco install nasm -y
+  - perl -v
 
 build_script:
   - cmd: |
