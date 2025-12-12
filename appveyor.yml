@@ -1,0 +1,43 @@
+image: Visual Studio 2022
+
+environment:
+  matrix:
+    - NAME: Win32-static
+      ARCH: x86
+      CONFIG: VC-WIN32
+      SHARED: no-shared
+
+    - NAME: Win32-shared
+      ARCH: x86
+      CONFIG: VC-WIN32
+      SHARED: shared
+
+    - NAME: Win64-static
+      ARCH: x64
+      CONFIG: VC-WIN64A
+      SHARED: no-shared
+
+    - NAME: Win64-shared
+      ARCH: x64
+      CONFIG: VC-WIN64A
+      SHARED: shared
+
+install:
+  - choco install nasm strawberryperl -y
+  - set PATH=C:\Strawberry\perl\bin;%PATH%
+
+build_script:
+  - cmd: |
+      if "%ARCH%"=="x86" (
+        call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86
+      ) else (
+        call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
+      )
+
+      set INSTALL_DIR=%APPVEYOR_BUILD_FOLDER%\install\%NAME%
+      perl Configure %CONFIG% %SHARED% --prefix="%INSTALL_DIR%" no-makedepend
+      nmake
+      nmake install
+
+artifacts:
+  - path: install\*
