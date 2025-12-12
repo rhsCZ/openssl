@@ -31,8 +31,8 @@ build_script:
       echo ===== %NAME% =====
       echo Shell: %COMSPEC%
 
-      if "%ARCH%"=="x86" call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86
-      if "%ARCH%"=="x64" call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
+      if "%ARCH%"=="x86" call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86
+      if "%ARCH%"=="x64" call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
 
       set INSTALL_DIR=%APPVEYOR_BUILD_FOLDER%\install\%NAME%
       mkdir "%INSTALL_DIR%"
