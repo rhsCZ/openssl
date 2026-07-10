@@ -21,6 +21,51 @@ BIGNUM *bn_expand2(BIGNUM *a, int words);
 void bn_correct_top(BIGNUM *a);
 
 /*
+ * bn_acquire_ossl_fn() and bn_release() work in tandem, and are
+ * most useful at call sites that temporarily operate on a BIGNUM's
+ * fixed-width OSSL_FN representation.
+ */
+
+/**
+ * Acquire the OSSL_FN from a BIGNUM.  The BIGNUM should no longer be
+ * used until bn_release() is called.
+ *
+ * @param[in]   b       The BIGNUM instance to get an OSSL_FN from
+ * @param[in]   limbs   The minimum number of limbs 'b' should be expanded to.
+ *                      Note that this doesn't set 'top', that's done by
+ *                      bn_release().
+ * @returns     the OSSL_FN instance of the BIGNUM, if there is one
+ * @pre         b must not be NULL
+ */
+OSSL_FN *bn_acquire_ossl_fn(BIGNUM *b, int limbs);
+
+/**
+ * Release the BIGNUM from which the OSSL_FN was acquired.  This will
+ * adjust the BIGNUM to what was done with its OSSL_FN, and the BIGNUM
+ * can again be used with BN_ functions.
+ *
+ * @param[in]   b       The BIGNUM instance to release
+ * @param[in]   limbs   The maximum number of significant limbs.  This sets
+ *                      'top'.
+ * @pre         b and b->data must not be NULL
+ */
+void bn_release(BIGNUM *b, int limbs);
+
+/**
+ * Get the OSSL_FN from a BIGNUM for read-only access.  Unlike
+ * bn_acquire_ossl_fn(), this does not acquire or resize the BIGNUM:
+ * the BIGNUM remains fully usable with BN_ functions, no bn_release()
+ * call is needed, and the returned OSSL_FN keeps the BIGNUM's current
+ * allocated width without any expansion.  Use this for read-only
+ * operands; use bn_acquire_ossl_fn() for writable results.
+ *
+ * @param[in]   bn   The BIGNUM instance to get an OSSL_FN from
+ * @returns     the OSSL_FN instance of the BIGNUM, or NULL if it has none
+ * @pre         bn must not be NULL
+ */
+OSSL_FN *bn_get_ossl_fn(const BIGNUM *bn);
+
+/*
  * Determine the modified width-(w+1) Non-Adjacent Form (wNAF) of 'scalar'.
  * This is an array r[] of values that are either zero or odd with an
  * absolute value less than 2^w satisfying scalar = \sum_j r[j]*2^j where at
@@ -125,15 +170,6 @@ int ossl_bn_rsa_fips186_5_derive_prime(BIGNUM *Y, BIGNUM *X, const BIGNUM *Xin,
     BN_GENCB *cb, uint32_t c);
 
 OSSL_LIB_CTX *ossl_bn_get_libctx(BN_CTX *ctx);
-
-/*
- * bn_ctx_acquire_ossl_fn_ctx() and bn_ctx_release_ossl_fn_ctx() work
- * in tandem.  They manage an OSSL_FN_CTX that is cached inside a BN_CTX
- * for use by BIGNUM wrapper functions that delegate to OSSL_FN.
- */
-OSSL_FN_CTX *bn_ctx_acquire_ossl_fn_ctx(BN_CTX *ctx, size_t max_n_frames,
-    size_t max_n_numbers, size_t max_n_limbs);
-void bn_ctx_release_ossl_fn_ctx(BN_CTX *ctx);
 
 extern const BIGNUM ossl_bn_inv_sqrt_2;
 
