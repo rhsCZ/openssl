@@ -28,11 +28,15 @@ extern "C" {
  * @def OSSL_FN_BYTES is defined with the size of OSSL_FN_ULONG, measured in
  * bytes.  This is mainly useful where 'sizeof(OSSL_FN_ULONG)' isn't suitable,
  * such as the C pre-processor.
+ *
+ * @def OSSL_FN_BITS is defined with the size of OSSL_FN_ULONG, measured in
+ * bits.
  */
 
 #ifdef BN_BYTES
 typedef BN_ULONG OSSL_FN_ULONG;
 #define OSSL_FN_BYTES BN_BYTES
+#define OSSL_FN_BITS (OSSL_FN_BYTES * 8)
 #endif
 
 #ifndef OSSL_FN_BYTES
@@ -192,6 +196,15 @@ OSSL_FN *OSSL_FN_copy(OSSL_FN *a, const OSSL_FN *b);
  * @returns     the destination.
  */
 OSSL_FN *OSSL_FN_copy_truncate(OSSL_FN *a, const OSSL_FN *b);
+
+/*
+ * Sentinel return value for the OSSL_FN_*_ctx_size() family, meaning "this
+ * operation needs no context"; the caller may skip the OSSL_FN_CTX
+ * allocation and pass NULL, which such an operation must accept.  This is
+ * unambiguous because every genuine arena holds at least one frame, so 1
+ * is smaller than any possible real size.
+ */
+#define OSSL_FN_CTX_SIZE_NONE ((size_t)1)
 
 /**
  * Calculate the arena payload size for an OSSL_FN_CTX.
