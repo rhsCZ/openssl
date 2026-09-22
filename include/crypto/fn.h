@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <openssl/opensslconf.h>
 #include <openssl/bn_limbs.h>
+#include <openssl/crypto.h>
 #include <openssl/types.h>
 #include "crypto/types.h"
 
@@ -176,6 +177,19 @@ int OSSL_FN_one(OSSL_FN *a);
 int OSSL_FN_zero(OSSL_FN *a);
 
 /**
+ * Return a read-only OSSL_FN holding the value one.
+ *
+ * @returns     A pointer to statically allocated constant storage holding
+ *              a 1-limb OSSL_FN with the value 1.  Never NULL.
+ *
+ * @note The returned OSSL_FN is a view on static constant storage; it must
+ *       not be freed, cleared, or written to.  This is a convenience
+ *       accessor for operations that need a constant 1 operand without
+ *       allocating.
+ */
+const OSSL_FN *OSSL_FN_value_one(void);
+
+/**
  * Copy the contents of one OSSL_FN instance to another.
  *
  * @param[out]  a       The destination OSSL_FN
@@ -329,6 +343,10 @@ void OSSL_FN_CTX_peak_usage(const OSSL_FN_CTX *ctx, size_t *peak_n_frames,
 /**
  * Free an OSSL_FN_CTX.
  *
+ * The whole context allocation, including the arena and everything that
+ * was carved out of it, is cleansed before being freed, so clearing of
+ * temporary numbers comes for free with the freeing of the context.
+ *
  * @param[in]   ctx     The OSSL_FN_CTX to be freed.  This may be NULL.
  */
 void OSSL_FN_CTX_free(OSSL_FN_CTX *ctx);
@@ -421,12 +439,29 @@ int OSSL_FN_cmp(const OSSL_FN *a, const OSSL_FN *b);
  * @param[in]           n       The bit index (0 = least significant)
  * @returns             1 if bit @p n of @p a is set, 0 otherwise.
  *
- * @note An out-of-range index (n < 0 or n >= the operand's width in bits)
- *       reads as 0.  The only control flow branches on the operand's public
- *       width (its dsize), not on limb values; the returned value is the bit
+ * @note An out-of-range index (n >= the operand's width in bits) reads as
+ *       0.  The only control flow branches on the operand's public width
+ *       (its dsize), not on limb values; the returned value is the bit
  *       itself, which is the information the caller asked for.
  */
-int OSSL_FN_is_bit_set(const OSSL_FN *a, int n);
+int OSSL_FN_is_bit_set(const OSSL_FN *a, size_t n);
+
+/**
+ * Clear bit @p n of @p a.
+ *
+ * @param[in,out]       a       The operand
+ * @param[in]           n       The bit index (0 = least significant)
+ * @returns             1 on success, 0 on error
+ *
+ * @note An out-of-range index (n >= the operand's width in bits) leaves
+ *       @p a unchanged and fails with
+ *       OSSL_FN_R_RESULT_ARG_TOO_SMALL (OSSL_FN is fixed-size, so the
+ *       operand cannot be grown to reach @p n).  The only control flow
+ *       branches on the operand's public width (its dsize) and on the
+ *       caller-chosen index @p n, not on limb values; whether the bit was
+ *       previously set is not revealed.
+ */
+int OSSL_FN_clear_bit(OSSL_FN *a, size_t n);
 
 /**
  * Test whether the unsigned value of @p a equals the single-limb word @p w.
@@ -1096,8 +1131,10 @@ size_t OSSL_FN_mod_inverse_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
  *                              instances from.
  * @returns             1 on success, 0 on error.
  *
- * @note This path is currently not constant-time per se; do not use it for
- *       secret exponents.  See the implementation in crypto/fn/fn_exp.c.
+ * @note The Montgomery path (odd moduli) is constant-time with respect to
+ *       the exponent's value; the simple path (even moduli) is not -- do
+ *       not use it for secret exponents.  See the implementation in
+ *       crypto/fn/fn_exp.c.
  *
  * @note This function currently requires that the OSSL_FN_CTX is sized per
  *       OSSL_FN_mod_exp_ctx_size().
@@ -1117,8 +1154,8 @@ int OSSL_FN_mod_exp(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *p,
  *
  * The returned size includes any frame budget needed by OSSL_FN_mod_exp().
  * It covers both the Montgomery (odd modulus) and simple (even modulus)
- * sliding-window paths, sizing the arena for whichever path the modulus
- * selects; see fn_exp.c.
+ * paths, sizing the arena for whichever path the modulus selects; see
+ * fn_exp.c.
  */
 size_t OSSL_FN_mod_exp_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
     const OSSL_FN *p, const OSSL_FN *m);
@@ -1162,7 +1199,7 @@ size_t OSSL_FN_mod_exp_simple_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
     const OSSL_FN *p, const OSSL_FN *m);
 
 /**
- * Calculate  a^p mod m  with the Montgomery sliding-window algorithm.
+ * Calculate  a^p mod m  with the Montgomery fixed-window algorithm.
  * This is the Montgomery entry point that OSSL_FN_mod_exp() dispatches to for
  * odd moduli; callers that perform many exponentiations against the same
  * modulus may call it directly and pass a reused OSSL_FN_MONT_CTX to amortise
@@ -1183,8 +1220,11 @@ size_t OSSL_FN_mod_exp_simple_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
  *                              freed here) and its modulus must be |m|.
  * @returns             1 on success, 0 on error.
  *
- * @note This path is not constant-time per se; do not use it for secret
- *       exponents.  See the implementation in crypto/fn/fn_exp.c.
+ * @note This path is constant-time with respect to the exponent's value:
+ *       fixed-width windows over the exponent's full width, a fixed-size
+ *       power table, and value-masked table selection.  What may leak is
+ *       limited to the operand widths and the modulus; see the
+ *       constant-time profile note in crypto/fn/fn_exp.c.
  */
 int OSSL_FN_mod_exp_mont(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *p,
     const OSSL_FN *m, OSSL_FN_CTX *ctx, OSSL_FN_MONT_CTX *in_mont);
@@ -1192,7 +1232,7 @@ int OSSL_FN_mod_exp_mont(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *p,
 /**
  * Calculate the arena payload size that OSSL_FN_mod_exp_mont() needs.
  *
- * Sizes only the Montgomery sliding-window path; the arena also serves a
+ * Sizes only the Montgomery fixed-window path; the arena also serves a
  * call that passes NULL |in_mont| (the function builds and frees its own
  * context then), since the operand modelling makes the two cases the same
  * size.  Pass a non-NULL |in_mont| to keep the sizing signature parallel to
@@ -1320,6 +1360,27 @@ size_t OSSL_FN_sqr_ctx_size(const OSSL_FN *r, const OSSL_FN *a);
 OSSL_FN_MONT_CTX *OSSL_FN_MONT_CTX_new(const OSSL_FN *mod);
 
 /**
+ * Thread-safe lazy initialization of a shared Montgomery context cache.
+ *
+ * @param[in,out]       pmont   The cache slot to read / fill
+ * @param[in]           lock    A read/write lock guarding @p pmont
+ * @param[in]           mod     The modulus
+ * @returns             The cached Montgomery context for @p mod, or NULL on
+ *                      error.  The returned pointer remains owned by
+ *                      @p pmont; the caller must not free it.
+ *
+ * @note If @p pmont already holds a context, it is returned unchanged;
+ *       whether it was initialized for @p mod is the caller's
+ *       responsibility.  Otherwise a context is built for @p mod outside
+ *       the lock (so concurrent lazy inits on the same slot duplicate the
+ *       work rather than serialize on it) and published under a write
+ *       lock; the loser of the race discards its work and returns the
+ *       winner's context.  Leak profile as for OSSL_FN_MONT_CTX_new().
+ */
+OSSL_FN_MONT_CTX *OSSL_FN_MONT_CTX_set_locked(OSSL_FN_MONT_CTX **pmont,
+    CRYPTO_RWLOCK *lock, const OSSL_FN *mod);
+
+/**
  * Free a Montgomery context.
  *
  * @param[in]   ctx     The context to be freed. This may be NULL.
@@ -1349,7 +1410,7 @@ OSSL_FN_MONT_CTX *OSSL_FN_MONT_CTX_dup(OSSL_FN_MONT_CTX *ctx);
  * has free space for 2 frame, 7 numbers, and
  * 7 * max(a->dsize, b->dsize, mont->N->dsize) + 2 limbs.
  * Note that this provides an upper bound.  Actual use of the arena may be
- * smaller - see OSSL_FN_mul_mont_ctx_size() for an exact, conditional value.
+ * smaller - see OSSL_FN_mul_mont_ctx_size() for a budgeted value.
  *
  * A timing side-channel may leak limb-size misalignment or whether the input
  * operands exceed the modulus. However, this leakage is non-critical and
@@ -1372,9 +1433,8 @@ int OSSL_FN_mul_mont(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
  * If `r == NULL`, the returned size is calculated as if @p r has the same size
  * as the modulus.
  *
- * A timing side-channel may leak limb-size misalignment or whether the input
- * operands exceed the modulus. However, this leakage is non-critical and
- * acceptable from a security perspective.
+ * This function inspects widths only; the returned size depends on the
+ * operand and modulus widths alone, never on limb values.
  */
 size_t OSSL_FN_mul_mont_ctx_size(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     OSSL_FN_MONT_CTX *mont);
@@ -1417,7 +1477,7 @@ size_t OSSL_FN_mul_mont_quick_ctx_size(OSSL_FN *r, const OSSL_FN *a,
 
 /**
  * Convert a number to Montgomery representation: r = a * R mod N,
- * where R = 2^(length of limb in bits).
+ * where R = 2^(length of N in bits).
  *
  * @param[out]          r       The OSSL_FN for the result
  * @param[in]           a       The operand
@@ -1430,7 +1490,7 @@ size_t OSSL_FN_mul_mont_quick_ctx_size(OSSL_FN *r, const OSSL_FN *a,
  * the same size and that the OSSL_FN_CTX has free space for 2 frame,
  * 5 numbers, and 5 * max(a->dsize, mont->N->dsize) + 2 limbs.
  * Note that this provides an upper bound.  Actual use of the arena may be
- * smaller - see OSSL_FN_to_mont_ctx_size() for an exact, conditional value.
+ * smaller - see OSSL_FN_to_mont_ctx_size() for a budgeted value.
  *
  * A timing side-channel may leak limb-size misalignment or whether @p a
  * exceeds the modulus. However, this leakage is non-critical and acceptable
@@ -1452,16 +1512,15 @@ int OSSL_FN_to_mont(OSSL_FN *r, const OSSL_FN *a,
  * If `r == NULL`, the returned size is calculated as if @p r has the same
  * size as the modulus.
  *
- * A timing side-channel may leak limb-size misalignment or whether @p a
- * exceeds the modulus. However, this leakage is non-critical and acceptable
- * from a security perspective.
+ * This function inspects widths only; the returned size depends on the
+ * operand and modulus widths alone, never on limb values.
  */
 size_t OSSL_FN_to_mont_ctx_size(OSSL_FN *r, const OSSL_FN *a,
     OSSL_FN_MONT_CTX *mont);
 
 /**
  * Convert a number from Montgomery representation: r = a * R^(-1) mod N,
- * where R = 2^(length of limb in bits).
+ * where R = 2^(length of N in bits).
  *
  * @param[out]          r       The OSSL_FN for the result
  * @param[in]           a       The operand
@@ -1471,8 +1530,11 @@ size_t OSSL_FN_to_mont_ctx_size(OSSL_FN *r, const OSSL_FN *a,
  * @returns             1 on success, 0 on error
  *
  * @note This function requires that @p r, @p a, and @p mont->N are of
- * the same size, @p a is less than @p mont->N, @p ctx has free space for
- * one temporary OSSL_FN with mont->N->dsize+2 limbs, plus one frame.
+ * the same size.  @p a need not be fully reduced modulo @p mont->N; any
+ * value that fits that limb width (sometimes called "almost reduced")
+ * is accepted.  The result is fully reduced.  @p ctx must have free
+ * space for one temporary OSSL_FN with mont->N->dsize+2 limbs, plus one
+ * frame.
  */
 int OSSL_FN_from_mont(OSSL_FN *r, const OSSL_FN *a,
     OSSL_FN_MONT_CTX *mont, OSSL_FN_CTX *ctx);

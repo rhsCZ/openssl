@@ -17,6 +17,7 @@
 
 #include <openssl/rand.h>
 #include <openssl/err.h>
+#include <openssl/crypto.h>
 #include "crypto/fn.h"
 #include "crypto/fn_intern.h"
 #include "crypto/fnerr.h"
@@ -1070,6 +1071,66 @@ static int test_set_word(int i)
 err:
     OSSL_FN_free(a);
     OSSL_FN_free(ref);
+    return ret;
+}
+
+static int test_clear_bit(void)
+{
+    int ret = 0;
+    OSSL_FN *a = NULL;
+    const OSSL_FN_ULONG *u = NULL;
+    size_t dsize = 4, i;
+    OSSL_FN_ULONG expect;
+
+    if (!TEST_ptr(a = OSSL_FN_new_limbs(dsize)))
+        goto err;
+
+    /* All bits set: clear the lowest bit, a limb-boundary bit, a high bit. */
+    /* Constness deliberately violated here, as in pollute() */
+    memset((OSSL_FN_ULONG *)ossl_fn_get_words(a), 0xff, dsize * OSSL_FN_BYTES);
+
+    if (!TEST_true(OSSL_FN_clear_bit(a, 0))
+        || !TEST_false(OSSL_FN_is_bit_set(a, 0))
+        || !TEST_true(OSSL_FN_is_bit_set(a, 1)))
+        goto err;
+
+    if (!TEST_true(OSSL_FN_clear_bit(a, OSSL_FN_BITS))
+        || !TEST_false(OSSL_FN_is_bit_set(a, OSSL_FN_BITS)))
+        goto err;
+
+    if (!TEST_true(OSSL_FN_clear_bit(a, dsize * OSSL_FN_BITS - 1))
+        || !TEST_false(OSSL_FN_is_bit_set(a, dsize * OSSL_FN_BITS - 1)))
+        goto err;
+
+    /* Clearing an already-clear bit succeeds and changes nothing. */
+    if (!TEST_true(OSSL_FN_clear_bit(a, 0))
+        || !TEST_false(OSSL_FN_is_bit_set(a, 0)))
+        goto err;
+
+    /* Every other bit must still be set. */
+    u = ossl_fn_get_words(a);
+    for (i = 0; i < dsize; i++) {
+        expect = ~OSSL_FN_ULONG_C(0);
+        if (i == 0)
+            expect &= ~OSSL_FN_ULONG_C(1);
+        if (i == 1)
+            expect &= ~OSSL_FN_ULONG_C(1);
+        if (i == dsize - 1)
+            expect &= ~(OSSL_FN_ULONG_C(1) << (OSSL_FN_BITS - 1));
+        if (!TEST_true(u[i] == expect))
+            goto err;
+    }
+
+    /* Out-of-range indexes fail and leave the operand unchanged. */
+    if (!TEST_false(OSSL_FN_clear_bit(a, dsize * OSSL_FN_BITS))
+        || !TEST_false(OSSL_FN_clear_bit(a, dsize * OSSL_FN_BITS + 7)))
+        goto err;
+    if (!TEST_false(OSSL_FN_is_bit_set(a, 0)))
+        goto err;
+
+    ret = 1;
+err:
+    OSSL_FN_free(a);
     return ret;
 }
 
@@ -4195,8 +4256,9 @@ err:
  * OSSL_FN_mod_exp
  *
  * Tests use an independent reference oracle (plain left-to-right binary
- * square-and-multiply, distinct from the sliding-window implementation under
- * test) plus a handful of known-answer cases that anchor both.  The reference
+ * square-and-multiply, distinct from both the sliding-window and the
+ * fixed-window implementations under test) plus a handful of known-answer
+ * cases that anchor both.  The reference
  * is built on OSSL_FN_mod_mul, which has its own tests; a few KATs guard both
  * the reference and the implementation against a shared mod_mul bug.
  */
@@ -4220,14 +4282,25 @@ static const OSSL_FN_ULONG exp_a3[] = { OSSL_FN_ULONG_C(3) };
 static const OSSL_FN_ULONG exp_a5[] = { OSSL_FN_ULONG_C(5) };
 static const OSSL_FN_ULONG exp_a7[] = { OSSL_FN_ULONG_C(7) };
 static const OSSL_FN_ULONG exp_p0[] = { OSSL_FN_ULONG_C(0) };
+/* Zero-valued exponent in a multi-limb container. */
+static const OSSL_FN_ULONG exp_p0_wide[] = { OSSL_FN_ULONG_C(0), OSSL_FN_ULONG_C(0) };
 static const OSSL_FN_ULONG exp_p1[] = { OSSL_FN_ULONG_C(1) };
 static const OSSL_FN_ULONG exp_p5[] = { OSSL_FN_ULONG_C(5) };
 static const OSSL_FN_ULONG exp_p10[] = { OSSL_FN_ULONG_C(10) };
 static const OSSL_FN_ULONG exp_p16[] = { OSSL_FN_ULONG_C(16) };
-/* 30-bit exponent => sliding window size 3. */
+/* 30-bit exponent => window size 3. */
 static const OSSL_FN_ULONG exp_p30[] = { OSSL_FN_ULONG_C(0x3FFFFFFF) };
-/* 256-bit exponent (all-ones) => sliding window size 5. */
+/* 256-bit exponent (all-ones) => fixed window size 4. */
 static const OSSL_FN_ULONG exp_p256[] = {
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+};
+/* 384-bit exponent (all-ones) => fixed window size 5. */
+static const OSSL_FN_ULONG exp_p384[] = {
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
     OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
     OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
     OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
@@ -4240,6 +4313,17 @@ static const OSSL_FN_ULONG exp_m7[] = { OSSL_FN_ULONG_C(7) };
 static const OSSL_FN_ULONG exp_m6[] = { OSSL_FN_ULONG_C(6) }; /* even */
 static const OSSL_FN_ULONG exp_m1000[] = { OSSL_FN_ULONG_C(1000) }; /* even */
 static const OSSL_FN_ULONG exp_m65521[] = { OSSL_FN_ULONG_C(65521) };
+/* 512-bit odd modulus (all-ones), a whole multiple of 8 limbs at any limb width. */
+static const OSSL_FN_ULONG exp_m512[] = {
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+    OSSL_FN_ULONG64_C(0xffffffff, 0xffffffff),
+};
 
 /* Known answers. */
 static const OSSL_FN_ULONG ex_2_10_m1000[] = { OSSL_FN_ULONG_C(24) }; /* 1024 mod 1000 */
@@ -4259,6 +4343,9 @@ static struct mod_exp_test_st test_mod_exp_cases[] = {
     { exp_a2, LIMBSOF(exp_a2), exp_p16, LIMBSOF(exp_p16),
         exp_m65521, LIMBSOF(exp_m65521), ex_2_16_m65521, LIMBSOF(ex_2_16_m65521) },
     { exp_a5, LIMBSOF(exp_a5), exp_p0, LIMBSOF(exp_p0),
+        exp_m7, LIMBSOF(exp_m7), ex_5_0_m7, LIMBSOF(ex_5_0_m7) },
+    /* Known-answer: zero-valued exponent in a multi-limb container. */
+    { exp_a5, LIMBSOF(exp_a5), exp_p0_wide, LIMBSOF(exp_p0_wide),
         exp_m7, LIMBSOF(exp_m7), ex_5_0_m7, LIMBSOF(ex_5_0_m7) },
     { exp_a5, LIMBSOF(exp_a5), exp_p0, LIMBSOF(exp_p0),
         exp_m1, LIMBSOF(exp_m1), ex_5_0_m1, LIMBSOF(ex_5_0_m1) },
@@ -4280,18 +4367,34 @@ static struct mod_exp_test_st test_mod_exp_cases[] = {
     /* Reference-checked: base >= modulus (forces initial reduction). */
     { exp_m7, LIMBSOF(exp_m7), exp_p5, LIMBSOF(exp_p5),
         exp_m5, LIMBSOF(exp_m5), NULL, 0 },
-    /* Reference-checked: wide operands under secp128r1 prime, window 5. */
+    /* Reference-checked: exponent much wider than the modulus. */
+    { exp_a5, LIMBSOF(exp_a5), exp_p256, LIMBSOF(exp_p256),
+        exp_m7, LIMBSOF(exp_m7), NULL, 0 },
+    /* Reference-checked: exponent much narrower than the modulus. */
+    { exp_a5, LIMBSOF(exp_a5), exp_p5, LIMBSOF(exp_p5),
+        mod_secp128r1_p, LIMBSOF(mod_secp128r1_p), NULL, 0 },
+    /* Reference-checked: wide operands under secp128r1 prime, window 4. */
     { num5, LIMBSOF(num5), exp_p256, LIMBSOF(exp_p256),
         mod_secp128r1_p, LIMBSOF(mod_secp128r1_p), NULL, 0 },
     { num2, LIMBSOF(num2), num8, LIMBSOF(num8),
         mod_secp128r1_p, LIMBSOF(mod_secp128r1_p), NULL, 0 },
     { mod_secp128r1_x2, LIMBSOF(mod_secp128r1_x2), exp_p256, LIMBSOF(exp_p256),
         mod_secp128r1_p, LIMBSOF(mod_secp128r1_p), NULL, 0 },
+    /*
+     * Reference-checked: 384-bit exponent => fixed window size 5, which
+     * also selects the accelerated gather path where available.
+     */
+    { num5, LIMBSOF(num5), exp_p384, LIMBSOF(exp_p384),
+        mod_secp128r1_p, LIMBSOF(mod_secp128r1_p), NULL, 0 },
+    /* Same, with a modulus a whole multiple of 8 limbs wide. */
+    { num5, LIMBSOF(num5), exp_p384, LIMBSOF(exp_p384),
+        exp_m512, LIMBSOF(exp_m512), NULL, 0 },
 };
 
 /*
  * Independent reference: plain left-to-right binary square-and-multiply.
- * Distinct from the sliding-window implementation under test.
+ * Distinct from the implementations under test (sliding-window and
+ * fixed-window).
  */
 static int mod_exp_reference(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *p,
     const OSSL_FN *m, OSSL_FN_CTX *ctx)
@@ -4587,7 +4690,7 @@ err:
  */
 static int test_mod_exp_result_size(int i)
 {
-    /* Wide case: num5 ^ exp_p256 mod secp128r1 prime, window 5. */
+    /* Wide case: num5 ^ exp_p256 mod secp128r1 prime, window 4. */
     size_t a_size = LIMBSOF(num5);
     size_t p_size = LIMBSOF(exp_p256);
     size_t m_size = LIMBSOF(mod_secp128r1_p);
@@ -4682,7 +4785,9 @@ static int test_mod_exp_ctx_size(void)
     if (!TEST_true(OSSL_FN_mod_exp(r, fa, fp, fm, ctx)))
         goto err;
     OSSL_FN_CTX_peak_usage(ctx, &peak_frames, &peak_numbers, &peak_limbs);
-    if (!TEST_size_t_gt(peak_frames, 0))
+    if (!TEST_size_t_gt(peak_frames, 0)
+        || !TEST_size_t_gt(peak_numbers, 0)
+        || !TEST_size_t_gt(peak_limbs, 0))
         goto err;
 
     /* Cross-check against the reference oracle. */
@@ -4713,7 +4818,7 @@ err:
  */
 static int test_mod_exp_mont_in_mont(void)
 {
-    /* num5 ^ exp_p256 mod secp128r1 prime, window 5. */
+    /* num5 ^ exp_p256 mod secp128r1 prime, window 4. */
     size_t a_size = LIMBSOF(num5);
     size_t p_size = LIMBSOF(exp_p256);
     size_t m_size = LIMBSOF(mod_secp128r1_p);
@@ -4856,6 +4961,80 @@ err:
 }
 
 /*
+ * OSSL_FN_MONT_CTX_set_locked(): lazy init fills the cache slot, a repeat
+ * call returns the same pointer, and the cached context is usable for
+ * OSSL_FN_mod_exp_mont() (compared against the reference oracle).
+ */
+static int test_mont_ctx_set_locked(void)
+{
+    size_t a_size = LIMBSOF(num5);
+    size_t p_size = LIMBSOF(exp_p256);
+    size_t m_size = LIMBSOF(mod_secp128r1_p);
+    size_t L = a_size > m_size ? a_size : m_size;
+    CRYPTO_RWLOCK *lock = NULL;
+    OSSL_FN_MONT_CTX *cached = NULL, *mont = NULL;
+    OSSL_FN_CTX *ctx_fn = NULL, *ctx_ref = NULL;
+    OSSL_FN *fa = NULL, *fp = NULL, *fm = NULL, *r = NULL, *r_ref = NULL;
+    size_t size;
+    int ret = 0;
+
+    fa = OSSL_FN_new_limbs(L);
+    fp = OSSL_FN_new_limbs(p_size);
+    fm = OSSL_FN_new_limbs(m_size);
+    r = OSSL_FN_new_limbs(m_size);
+    r_ref = OSSL_FN_new_limbs(m_size);
+    if (!TEST_ptr(fa) || !TEST_ptr(fp) || !TEST_ptr(fm)
+        || !TEST_ptr(r) || !TEST_ptr(r_ref))
+        goto err;
+    if (!TEST_true(ossl_fn_set_words(fa, num5, a_size))
+        || !TEST_true(ossl_fn_set_words(fp, exp_p256, p_size))
+        || !TEST_true(ossl_fn_set_words(fm, mod_secp128r1_p, m_size)))
+        goto err;
+    if (!TEST_ptr(lock = CRYPTO_THREAD_lock_new()))
+        goto err;
+
+    /* Lazy init: the empty slot is filled. */
+    if (!TEST_ptr(mont = OSSL_FN_MONT_CTX_set_locked(&cached, lock, fm)))
+        goto err;
+    if (!TEST_ptr_eq(cached, mont))
+        goto err;
+
+    /* A repeat call returns the cached context unchanged. */
+    if (!TEST_ptr_eq(OSSL_FN_MONT_CTX_set_locked(&cached, lock, fm), mont))
+        goto err;
+    if (!TEST_ptr_eq(cached, mont))
+        goto err;
+
+    /* The cached context is usable for modular exponentiation. */
+    size = OSSL_FN_mod_exp_mont_ctx_size(r, fa, fp, fm, mont);
+    if (!TEST_size_t_ne(size, 0)
+        || !TEST_ptr(ctx_fn = OSSL_FN_CTX_new_size(NULL, size))
+        || !TEST_ptr(ctx_ref = OSSL_FN_CTX_new(NULL, 8, 16, 16 * m_size + 16)))
+        goto err;
+    if (!TEST_true(OSSL_FN_mod_exp_mont(r, fa, fp, fm, ctx_fn, mont)))
+        goto err;
+    if (!TEST_true(mod_exp_reference(r_ref, fa, fp, fm, ctx_ref)))
+        goto err;
+    if (!TEST_mem_eq(ossl_fn_get_words(r), m_size * OSSL_FN_BYTES,
+            ossl_fn_get_words(r_ref), m_size * OSSL_FN_BYTES))
+        goto err;
+
+    ret = 1;
+err:
+    /* The cached context is owned by the slot; free it once, directly. */
+    OSSL_FN_MONT_CTX_free(cached);
+    CRYPTO_THREAD_lock_free(lock);
+    OSSL_FN_CTX_free(ctx_fn);
+    OSSL_FN_CTX_free(ctx_ref);
+    OSSL_FN_free(fa);
+    OSSL_FN_free(fp);
+    OSSL_FN_free(fm);
+    OSSL_FN_free(r);
+    OSSL_FN_free(r_ref);
+    return ret;
+}
+
+/*
  * OSSL_FN_mod_exp_mont_ctx_size(): the mont-only size must be positive, must
  * equal the dispatcher size or be smaller (dispatcher also budgets the
  * simple-path loop mul), and must not depend on whether in_mont is NULL or a
@@ -4863,7 +5042,7 @@ err:
  */
 static int test_mod_exp_mont_ctx_size(void)
 {
-    /* num5 ^ exp_p256 mod secp128r1 prime, window 5. */
+    /* num5 ^ exp_p256 mod secp128r1 prime, window 4. */
     size_t a_size = LIMBSOF(num5);
     size_t p_size = LIMBSOF(exp_p256);
     size_t m_size = LIMBSOF(mod_secp128r1_p);
@@ -5034,16 +5213,10 @@ static int test_kronecker_legendre(int i)
     /*
      * ctx must hold both kronecker's and mod_exp's scratch needs.
      * Size for the larger of the two (mod_exp typically needs more).
-     * OSSL_FN_mod_exp_ctx_size() is value-dependent on |a| (a reduction
-     * frame is budgeted when a >= m), so fa is pre-set to p; the loop
-     * below never uses a larger value than p + 1, which sizes the same.
-     *
-     * TODO(FIXNUM): the value dependence shouldn't be necessary; a
-     * reduction should generally always be budgeted.  Reconsider if the
-     * mont functions are ever made value-agnostic.
+     * Both sizing helpers inspect widths only, so no operand values need
+     * pre-setting for them (fp's low limb, which selects the mod_exp
+     * path, is already set above).
      */
-    if (!TEST_true(OSSL_FN_set_word(fa, p)))
-        goto err;
     size_t ksz = OSSL_FN_kronecker_ctx_size(fa, fp);
     size_t esz = OSSL_FN_mod_exp_ctx_size(r, fa, exp, fp);
     size_t sz = ksz > esz ? ksz : esz;
@@ -5458,6 +5631,7 @@ int setup_tests(void)
     ADD_ALL_TESTS(test_add_word, OSSL_NELEM(add_word_cases));
     ADD_ALL_TESTS(test_sub_word, OSSL_NELEM(sub_word_cases));
     ADD_ALL_TESTS(test_set_word, OSSL_NELEM(set_word_cases));
+    ADD_TEST(test_clear_bit);
     ADD_TEST(test_one);
     ADD_TEST(test_zero);
     ADD_ALL_TESTS(test_lshift1, 2);
@@ -5518,6 +5692,7 @@ int setup_tests(void)
     ADD_TEST(test_mod_exp_ctx_size);
     ADD_TEST(test_mod_exp_mont_in_mont);
     ADD_TEST(test_mod_exp_mont_in_mont_mismatch);
+    ADD_TEST(test_mont_ctx_set_locked);
     ADD_TEST(test_mod_exp_mont_ctx_size);
     ADD_ALL_TESTS(test_kronecker, OSSL_NELEM(kronecker_cases));
     ADD_ALL_TESTS(test_kronecker_legendre, OSSL_NELEM(legendre_primes));

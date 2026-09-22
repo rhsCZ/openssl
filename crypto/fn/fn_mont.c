@@ -19,6 +19,7 @@
 #include "internal/safe_math.h"
 #include "fn_local.h"
 #include "../bn/bn_local.h"
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 
 OSSL_SAFE_MATH_ADDU(size_t, size_t, OSSL_SAFE_MATH_MAXU(size_t))
@@ -150,6 +151,52 @@ OSSL_FN_MONT_CTX *OSSL_FN_MONT_CTX_new(const OSSL_FN *mod)
     }
 
     return ctx;
+}
+
+/*
+ * Thread-safe lazy initialization of a shared Montgomery context cache.
+ * The context construction runs outside the lock, so concurrent lazy
+ * inits on the same slot duplicate the work rather than serialize on it;
+ * the loser of the publication race discards its context and returns the
+ * winner's.
+ *
+ * Constant-time profile:
+ *   - The control flow branches on the cache state (*pmont == NULL or
+ *     not) and on lock acquisition, not on the modulus value.
+ *   - What leaks: whether the cache was already populated, and the leak
+ *     profile of OSSL_FN_MONT_CTX_new() when a new context is built
+ *     (essentially the modulus value, which is expected to be public).
+ */
+OSSL_FN_MONT_CTX *OSSL_FN_MONT_CTX_set_locked(OSSL_FN_MONT_CTX **pmont,
+    CRYPTO_RWLOCK *lock, const OSSL_FN *mod)
+{
+    OSSL_FN_MONT_CTX *ret = NULL, *newctx = NULL;
+    int lock_failed = 0;
+
+    if (!CRYPTO_atomic_load_ptr((void **)pmont, (void **)&ret, lock))
+        return NULL;
+    if (ret != NULL)
+        return ret;
+
+    newctx = OSSL_FN_MONT_CTX_new(mod);
+    if (newctx == NULL)
+        return NULL;
+
+    /*
+     * The compare-and-set publication, after the local work is done.  If
+     * the exchange fails, |ret| receives the winning context and the loser
+     * |newctx| is discarded; if it failed because of the lock, there is no
+     * winner and NULL is returned.
+     */
+    if (CRYPTO_atomic_cmp_exch_ptr((void **)pmont, (void **)&ret, newctx,
+            lock, &lock_failed)) {
+        ret = newctx;
+    } else {
+        OSSL_FN_MONT_CTX_free(newctx);
+        if (lock_failed)
+            ret = NULL;
+    }
+    return ret;
 }
 
 /*
@@ -327,15 +374,16 @@ end:
 /*
  * Arena payload size needed by OSSL_FN_mul_mont().
  *
+ * The runtime canonicalises each operand into [0, N) when needed, a test
+ * that branches on operand values.  Sizing inspects widths only, so the
+ * canonicalisation scratch numbers and their OSSL_FN_mod frames are
+ * budgeted unconditionally; the arena may therefore be slightly larger
+ * than a particular call needs.
+ *
  * Constant-time profile:
- *   - This function is NOT fully constant-time.
- *   - What leaks: the a->dsize != len and OSSL_FN_cmp(a, N) >= 0 tests (and
- *     the same for b) branch on the operand values to choose how many scratch
- *     limbs to budget, so both the branch taken and the returned size reveal
- *     whether each operand was already reduced and correctly sized.  The
- *     comparison OSSL_FN_cmp is itself constant-time; no other value leak.
- *   - The primitives used (OSSL_FN_cmp, OSSL_FN_mod_ctx_size) branch only on
- *     public widths, except that OSSL_FN_cmp performs a value comparison.
+ *   - This function is constant-time.  It branches only on public widths
+ *     (operand dsize vs the modulus width), and the returned size depends
+ *     on widths alone.
  */
 size_t OSSL_FN_mul_mont_ctx_size(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     OSSL_FN_MONT_CTX *mont)
@@ -347,41 +395,21 @@ size_t OSSL_FN_mul_mont_ctx_size(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     }
 
     int len = mont->N->dsize;
-    int num = 0;
-    size_t ret = 0, tmp;
-    int err = 0;
-
-    if (a->dsize != len || OSSL_FN_cmp(a, mont->N) >= 0) {
-        num++;
-        if ((tmp = OSSL_FN_mod_ctx_size(NULL, a, mont->N)) == 0)
-            return 0;
-        if (tmp > ret)
-            ret = tmp;
-    }
-
-    if (b->dsize != len || OSSL_FN_cmp(b, mont->N) >= 0) {
-        num++;
-        if ((tmp = OSSL_FN_mod_ctx_size(NULL, b, mont->N)) == 0)
-            return 0;
-        if (tmp > ret)
-            ret = tmp;
-    }
+    /* a and b each get a canonicalisation budget; see above. */
+    size_t num = 2;
+    size_t own_size, nested_size;
 
     if (r != NULL && r->dsize != len)
         num++;
 
-    if (ossl_unlikely(num > 0 && (size_t)len > SIZE_MAX / num))
-        return 0;
+    own_size = OSSL_FN_CTX_size(1, num, num * (size_t)len);
+    nested_size = ossl_fn_ctx_max_size(
+        ossl_fn_ctx_max_size(
+            OSSL_FN_mod_ctx_size(NULL, a, mont->N),
+            OSSL_FN_mod_ctx_size(NULL, b, mont->N)),
+        OSSL_FN_mul_mont_quick_ctx_size(NULL, NULL, NULL, mont));
 
-    if ((tmp = OSSL_FN_mul_mont_quick_ctx_size(NULL, NULL, NULL, mont)) == 0)
-        return 0;
-    if (tmp > ret)
-        ret = tmp;
-
-    ret = safe_add_size_t(ret, OSSL_FN_CTX_size(1, num, num * (size_t)len),
-        &err);
-
-    return err == 0 ? ret : 0;
+    return ossl_fn_ctx_add_size(own_size, nested_size);
 }
 
 /*
@@ -461,13 +489,16 @@ end:
 /*
  * Arena payload size needed by OSSL_FN_to_mont().
  *
+ * The runtime canonicalises a into [0, N) when needed, a test that
+ * branches on the operand value.  Sizing inspects widths only, so the
+ * canonicalisation scratch number and its OSSL_FN_mod frame are budgeted
+ * unconditionally; the arena may therefore be slightly larger than a
+ * particular call needs.
+ *
  * Constant-time profile:
- *   - This function is NOT constant-time when an operand needs canonicalising.
- *   - What leaks: the a->dsize != len and OSSL_FN_cmp(a, N) >= 0 tests branch
- *     on the operand value to choose how many scratch limbs to budget, so
- *     both the branch taken and the returned size reveal whether a was already
- *     reduced and correctly sized.  OSSL_FN_cmp is itself constant-time; no
- *     other value leak.
+ *   - This function is constant-time.  It branches only on public widths
+ *     (operand dsize vs the modulus width), and the returned size depends
+ *     on widths alone.
  */
 size_t OSSL_FN_to_mont_ctx_size(OSSL_FN *r, const OSSL_FN *a,
     OSSL_FN_MONT_CTX *mont)
@@ -478,33 +509,19 @@ size_t OSSL_FN_to_mont_ctx_size(OSSL_FN *r, const OSSL_FN *a,
     }
 
     int len = mont->N->dsize;
-    int num = 0;
-    size_t ret = 0, tmp;
-    int err = 0;
-
-    if (a->dsize != len || OSSL_FN_cmp(a, mont->N) >= 0) {
-        num++;
-        if ((tmp = OSSL_FN_mod_ctx_size(NULL, a, mont->N)) == 0)
-            return 0;
-        if (tmp > ret)
-            ret = tmp;
-    }
+    /* a gets a canonicalisation budget; see above. */
+    size_t num = 1;
+    size_t own_size, nested_size;
 
     if (r != NULL && r->dsize != len)
         num++;
 
-    if (ossl_unlikely(num > 0 && (size_t)len > SIZE_MAX / num))
-        return 0;
+    own_size = OSSL_FN_CTX_size(1, num, num * (size_t)len);
+    nested_size = ossl_fn_ctx_max_size(
+        OSSL_FN_mod_ctx_size(NULL, a, mont->N),
+        OSSL_FN_mul_mont_quick_ctx_size(NULL, NULL, NULL, mont));
 
-    if ((tmp = OSSL_FN_mul_mont_quick_ctx_size(NULL, NULL, NULL, mont)) == 0)
-        return 0;
-    if (tmp > ret)
-        ret = tmp;
-
-    ret = safe_add_size_t(ret, OSSL_FN_CTX_size(1, num, num * (size_t)len),
-        &err);
-
-    return err == 0 ? ret : 0;
+    return ossl_fn_ctx_add_size(own_size, nested_size);
 }
 
 /*

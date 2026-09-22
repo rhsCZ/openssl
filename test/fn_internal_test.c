@@ -14,8 +14,11 @@
  * ../crypto/fn/fn_local.h, such as introspection.
  */
 
+#include <openssl/bn.h>
 #include "crypto/fn.h"
 #include "crypto/fn_intern.h"
+#include "crypto/bn.h"
+#include "crypto/bn_dh.h"
 #include "fn_local.h"
 #include "testutil.h"
 
@@ -469,6 +472,207 @@ static int test_ctx_size_compose(void)
         && TEST_size_t_eq(ossl_fn_ctx_max_size(s1, 0), 0);
 }
 
+/*
+ * bn_get_ossl_fn() on global BN_FLG_STATIC_DATA constants must return their
+ * OSSL_FN backing directly.  These are defined with the OSSL_FN_STATIC_*
+ * machinery; the test verifies the BIGNUM views resolve to usable OSSL_FN
+ * operands.
+ */
+static int test_static_const_views(void)
+{
+    const OSSL_FN *f1 = NULL;
+    const OSSL_FN *f2 = NULL;
+    const OSSL_FN *fp = NULL;
+    const OSSL_FN *fs = NULL;
+
+    /* The literal 1: 1 limb, value 1, one shared storage object */
+    if (!TEST_ptr(f1 = OSSL_FN_value_one())
+        || !TEST_size_t_eq(ossl_fn_get_dsize(f1), 1)
+        || !TEST_true(OSSL_FN_is_word(f1, 1))
+        || !TEST_ptr_eq(bn_get_ossl_fn(BN_value_one()), f1))
+        return 0;
+
+    /* The literal 2: 1 limb, value 2 */
+    if (!TEST_ptr(f2 = bn_get_ossl_fn(&ossl_bignum_const_2))
+        || !TEST_size_t_eq(ossl_fn_get_dsize(f2), 1)
+        || !TEST_true(OSSL_FN_is_word(f2, 2)))
+        return 0;
+
+    /* A group prime: BIGNUM and OSSL_FN views carry the same value */
+    if (!TEST_ptr(fp = bn_get_ossl_fn(&ossl_bignum_ffdhe2048_p))
+        || !TEST_size_t_eq(ossl_fn_get_dsize(fp), OSSL_FN_BYTES == 8 ? 32 : 64)
+        || !TEST_size_t_eq(OSSL_FN_num_bits(fp),
+            (size_t)BN_num_bits(&ossl_bignum_ffdhe2048_p))
+        || !TEST_false(OSSL_FN_is_zero(fp)))
+        return 0;
+
+    /* inv_sqrt_2: non-NULL, non-zero, 4 limbs on 64-bit / 8 on 32-bit */
+    if (!TEST_ptr(fs = bn_get_ossl_fn(&ossl_bn_inv_sqrt_2))
+        || !TEST_size_t_eq(ossl_fn_get_dsize(fs),
+            OSSL_FN_BYTES == 8 ? 4 : 8)
+        || !TEST_false(OSSL_FN_is_zero(fs)))
+        return 0;
+
+    return 1;
+}
+
+/*
+ * Test that OSSL_FN_CTX_free() cleanses the whole context allocation
+ * before freeing it.  Custom memory hooks record the pointer and size of
+ * each allocation, and check that the buffer handed back to free() has
+ * been zeroed.  The hooks are installed by global_init(); the test resets
+ * the records before exercising OSSL_FN_CTX, and frees are only counted
+ * when they match a recorded allocation, so only the test's own activity
+ * is measured.
+ */
+static struct recorded_alloc_st {
+    void *ptr;
+    size_t size;
+} recorded_allocs[8];
+static size_t recorded_allocs_n = 0;
+static int recorded_allocs_nonzero = 0;
+static size_t alloc_count = 0;
+static size_t free_count = 0;
+static int realloc_hook_called = 0;
+/*
+ * The hooks see every allocation in the process, but recording and
+ * checking are scoped to test_ctx_free_clear()'s measurement window
+ * with this flag.  Outside the window the hooks behave like the plain
+ * libc functions, so later unrelated frees (such as library teardown
+ * at process exit) are never recorded or inspected.
+ */
+static int hooks_active = 0;
+
+static void record_alloc(void *ptr, size_t size)
+{
+    if (recorded_allocs_n < OSSL_NELEM(recorded_allocs)) {
+        recorded_allocs[recorded_allocs_n].ptr = ptr;
+        recorded_allocs[recorded_allocs_n].size = size;
+        recorded_allocs_n++;
+    }
+}
+
+static int check_free(void *ptr)
+{
+    for (size_t i = 0; i < recorded_allocs_n; i++) {
+        if (recorded_allocs[i].ptr == ptr) {
+            const unsigned char *p = ptr;
+
+            for (size_t j = 0; j < recorded_allocs[i].size; j++)
+                if (p[j] != 0)
+                    recorded_allocs_nonzero = 1;
+            recorded_allocs[i].ptr = NULL; /* only check each alloc once */
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void *hook_malloc(size_t num, const char *file, int line)
+{
+    void *ptr = malloc(num);
+
+    if (ptr != NULL && hooks_active) {
+        alloc_count++;
+        record_alloc(ptr, num);
+    }
+    return ptr;
+}
+
+static void *hook_realloc(void *addr, size_t num, const char *file, int line)
+{
+    /*
+     * This should never be called, 'cause OSSL_FN_CTX functions should
+     * call OPENSSL_clear_realloc(), which never calls the realloc hook.
+     * The records are deliberately not kept straight here: the test
+     * asserts this hook was never called, and using addr after
+     * realloc() would be a use-after-free anyway.
+     */
+    realloc_hook_called = 1;
+
+    return realloc(addr, num);
+}
+
+static void hook_free(void *ptr, const char *file, int line)
+{
+    if (ptr != NULL && hooks_active && check_free(ptr))
+        free_count++;
+    free(ptr);
+}
+
+static int test_ctx_free_clear(void)
+{
+    int ret = 0;
+    OSSL_FN_CTX *ctx = NULL;
+    size_t size = OSSL_FN_CTX_size(2, 4, 16);
+    const void *token = NULL;
+
+    if (!TEST_size_t_ne(size, 0))
+        return 0;
+
+    recorded_allocs_n = 0;
+    recorded_allocs_nonzero = 0;
+    alloc_count = 0;
+    free_count = 0;
+    realloc_hook_called = 0;
+    memset(recorded_allocs, 0, sizeof(recorded_allocs));
+    hooks_active = 1;
+
+    /* Setup: Create the arena, get a number and fill it with a non-zero pattern */
+    if (TEST_ptr(ctx = OSSL_FN_CTX_new_size(NULL, size))
+        && TEST_ptr(token = OSSL_FN_CTX_start(ctx))) {
+        OSSL_FN *fn;
+
+        if (TEST_ptr(fn = OSSL_FN_CTX_get_limbs(ctx, 4))) {
+            OSSL_FN_ULONG *u = (OSSL_FN_ULONG *)ossl_fn_get_words(fn);
+
+            memset(u, 0xff, 4 * OSSL_FN_BYTES);
+
+            /*
+             * Ever so hopeful, to be cleared by the test of
+             * recorded_allocs_nonzero below
+             */
+            ret = 1;
+        }
+        (void)OSSL_FN_CTX_end(ctx, token);
+    }
+
+    /*
+     * This is what we're actually testing, and should be called unconditionally
+     * anyway, so the arena gets freed if it was allocated.
+     */
+    OSSL_FN_CTX_free(ctx);
+    hooks_active = 0;
+
+    if (!TEST_int_eq(recorded_allocs_nonzero, 0))
+        ret = 0;
+
+    /* Prove that the hooks actually ran: allocs happened, all were freed */
+    if (!TEST_size_t_gt(alloc_count, 0)
+        || !TEST_size_t_eq(alloc_count, free_count))
+        ret = 0;
+
+    /* The realloc hook should never have been called */
+    if (!TEST_false(realloc_hook_called))
+        ret = 0;
+    return ret;
+}
+
+/*
+ * Install the memory hooks.  This runs before the first allocation through
+ * the default allocator, so CRYPTO_set_mem_functions() is guaranteed to be
+ * permitted (allow_customize in crypto/mem.c).  mfail is disabled in the
+ * test recipe, so its hooks and these don't fight.
+ */
+int global_init(void)
+{
+    if (!CRYPTO_set_mem_functions(hook_malloc, hook_realloc, hook_free)) {
+        fprintf(stderr, "Failed to install memory hooks\n");
+        return 0;
+    }
+    return 1;
+}
+
 int setup_tests(void)
 {
     ADD_TEST(test_struct);
@@ -480,6 +684,8 @@ int setup_tests(void)
     ADD_TEST(test_secure_ctx_size);
     ADD_TEST(test_ctx_peak_used);
     ADD_TEST(test_ctx_size_compose);
+    ADD_TEST(test_static_const_views);
+    ADD_TEST(test_ctx_free_clear);
 
     return 1;
 }
