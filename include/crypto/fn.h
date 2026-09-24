@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2025-2026 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -257,6 +257,22 @@ int OSSL_FN_from_bytes_be(OSSL_FN *r, const unsigned char *in, size_t len);
 #define OSSL_FN_CTX_SIZE_NONE ((size_t)1)
 
 /**
+ * Conditionally swap two OSSL_FN numbers of equal width.
+ *
+ * @param[in]           condition       Swap if non-zero, leave alone if zero
+ * @param[in,out]       a               The first operand
+ * @param[in,out]       b               The second operand
+ * @returns             1 on success, 0 on error
+ *
+ * @note Both operands must have the same width; a mismatch is reported as
+ *       OSSL_FN_R_RESULT_ARG_TOO_SMALL.
+ *
+ * @note Constant-time in both @p condition and the limb values.
+ *       The only control flow branches on the operands' public width.
+ */
+int OSSL_FN_consttime_swap(int condition, OSSL_FN *a, OSSL_FN *b);
+
+/**
  * Calculate the arena payload size for an OSSL_FN_CTX.
  *
  * @param[in]   max_n_frames    Maximum number of simultaneously active frames.
@@ -280,7 +296,8 @@ size_t OSSL_FN_CTX_size(size_t max_n_frames, size_t max_n_numbers,
 /**
  * Allocate a new OSSL_FN_CTX, given a set of input numbers.
  *
- * @param[in]   libctx          OpenSSL library context (currently unused)
+ * @param[in]   libctx          OpenSSL library context, retained and returned
+ *                              by OSSL_FN_CTX_get0_libctx()
  * @param[in]   max_n_frames    Maximum number of simultaneously active frames.
  *                              This indicates the expected depth of call stack
  *                              that the resulting OSSL_FN_CTX will be used in.
@@ -295,7 +312,8 @@ OSSL_FN_CTX *OSSL_FN_CTX_new(OSSL_LIB_CTX *libctx, size_t max_n_frames,
 /**
  * Allocate a new OSSL_FN_CTX with a given arena payload size.
  *
- * @param[in]   libctx          OpenSSL library context (currently unused)
+ * @param[in]   libctx          OpenSSL library context, retained and returned
+ *                              by OSSL_FN_CTX_get0_libctx()
  * @param[in]   size            Arena payload size in bytes, typically from
  *                              OSSL_FN_CTX_size().  A size of 0 is the error
  *                              return of OSSL_FN_CTX_size() and is treated as
@@ -315,7 +333,8 @@ OSSL_FN_CTX *OSSL_FN_CTX_secure_new(OSSL_LIB_CTX *libctx, size_t max_n_frames,
 /**
  * Allocate a new OSSL_FN_CTX in secure memory with a given arena payload size.
  *
- * @param[in]   libctx          OpenSSL library context (currently unused)
+ * @param[in]   libctx          OpenSSL library context, retained and returned
+ *                              by OSSL_FN_CTX_get0_libctx()
  * @param[in]   size            Arena payload size in bytes, typically from
  *                              OSSL_FN_CTX_size().  A size of 0 is treated as
  *                              an error, as in OSSL_FN_CTX_new_size().
@@ -339,6 +358,16 @@ OSSL_FN_CTX *OSSL_FN_CTX_secure_new_size(OSSL_LIB_CTX *libctx, size_t size);
  */
 void OSSL_FN_CTX_peak_usage(const OSSL_FN_CTX *ctx, size_t *peak_n_frames,
     size_t *peak_n_numbers, size_t *peak_n_limbs);
+
+/**
+ * Return the library context the OSSL_FN_CTX was created with.
+ *
+ * @param[in]   ctx     The OSSL_FN_CTX to query.  This may be NULL.
+ * @returns             The library context, or NULL (which denotes the
+ *                      global default) if @p ctx is NULL or was created
+ *                      without one.
+ */
+OSSL_LIB_CTX *OSSL_FN_CTX_get0_libctx(const OSSL_FN_CTX *ctx);
 
 /**
  * Free an OSSL_FN_CTX.
@@ -647,6 +676,26 @@ int OSSL_FN_rshift(OSSL_FN *r, const OSSL_FN *a, int n);
  * @returns             1 on success, 0 on error
  */
 int OSSL_FN_rshift1(OSSL_FN *r, const OSSL_FN *a);
+
+/**
+ * Keep the low @p n bits of @p a and clear every bit at position @p n and
+ * above, in place and in constant time.
+ *
+ * @param[in,out]       a       The number to mask
+ * @param[in]           n       Number of low bits to keep; must be below @p a's
+ *                              width
+ * @returns             1 on success, 0 if @p n is negative, at or beyond @p a's
+ *                              width, or on a NULL argument
+ *
+ * On failure an error is raised: ERR_R_PASSED_NULL_PARAMETER for a NULL @p a,
+ * OSSL_FN_R_INVALID_SHIFT for a negative @p n, or OSSL_FN_R_BITS_TOO_SMALL when
+ * @p a has fewer than @p n bits.
+ *
+ * @note Constant-time: the masking depends only on @p n and @p a's public
+ *       width, not on its value.  The counterpart of
+ *       ossl_bn_mask_bits_fixed_top().
+ */
+int OSSL_FN_mask_bits(OSSL_FN *a, int n);
 
 /**
  * Calculate the greatest common divisor of two OSSL_FN numbers.  Truncates
