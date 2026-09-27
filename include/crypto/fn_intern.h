@@ -85,9 +85,22 @@ static ossl_inline ossl_unused size_t ossl_fn_ctx_max_size(size_t a, size_t b)
  * append a fixed-size array).  Using the same macro for both guarantees
  * the header layouts stay in lockstep.
  */
-#define OSSL_FN_HEADER_FIELDS                  \
-    unsigned int is_dynamically_allocated : 1; \
-    unsigned int is_securely_allocated : 1;    \
+#define OSSL_FN_HEADER_FIELDS                                      \
+    /* Flag: alloced with OSSL_FN_new() or OSSL_FN_secure_new() */ \
+    unsigned int is_dynamically_allocated : 1;                     \
+    /* Flag: alloced with OSSL_FN_secure_new() */                  \
+    unsigned int is_securely_allocated : 1;                        \
+                                                                   \
+    /*                                                             \
+     * The size of the d array that follows, in number of          \
+     * OSSL_FN_ULONG.  The d array stores the number itself.       \
+     *                                                             \
+     * Note: |dsize| is an int, because it turns out that some     \
+     * lower level (possibly assembler) functions expect that type \
+     * (especially, that type size).                               \
+     * This deviates from the design in                            \
+     * doc/designs/fixed-size-large-numbers.md                     \
+     */                                                            \
     int dsize
 
 struct ossl_fn_st {
@@ -235,6 +248,49 @@ int ossl_fn_check_generated_prime(const OSSL_FN *w, int checks,
  * overflow or invalid input.
  */
 size_t ossl_fn_check_generated_prime_ctx_size(const OSSL_FN *w);
+
+/*
+ * Generate a probable prime (an RSA p or q candidate) per FIPS 186-5
+ * A.1.6 (Steps 4 & 5), optionally enforcing |p| congruent to |c| mod 8.
+ * |p| and |Xpout| must have room for nlen/2 bits; one limb of headroom
+ * over that width lets a carry past the width be detected rather than
+ * truncated.  Internally generated auxiliary primes and random draws
+ * that are not returned are cleared.  Returns 1 on success, 0 on error.
+ */
+int ossl_fn_rsa_fips186_5_gen_prob_primes(OSSL_FN *p, OSSL_FN *Xpout,
+    OSSL_FN *p1, OSSL_FN *p2, const OSSL_FN *Xp, const OSSL_FN *Xp1,
+    const OSSL_FN *Xp2, int nlen, const OSSL_FN *e, OSSL_FN_CTX *ctx,
+    BN_GENCB *cb, uint32_t c, OSSL_LIB_CTX *libctx);
+
+/*
+ * Calculate the arena payload size that
+ * ossl_fn_rsa_fips186_5_gen_prob_primes() needs.  |p1|, |p2|, |Xp1|
+ * and |Xp2| may be NULL, as for the operation.  Returns 0 on
+ * arithmetic overflow or invalid input.
+ */
+size_t ossl_fn_rsa_fips186_5_gen_prob_primes_ctx_size(const OSSL_FN *p,
+    const OSSL_FN *Xpout, const OSSL_FN *p1, const OSSL_FN *p2,
+    const OSSL_FN *Xp1, const OSSL_FN *Xp2, int nlen, const OSSL_FN *e);
+
+/*
+ * Generate a probable prime factor per FIPS 186-5 B.9 from two
+ * auxiliary primes using the Chinese Remainder Theorem.  Same width
+ * contract as ossl_fn_rsa_fips186_5_gen_prob_primes().  Returns 1 on
+ * success, 0 on error.
+ */
+int ossl_fn_rsa_fips186_5_derive_prime(OSSL_FN *Y, OSSL_FN *X,
+    const OSSL_FN *Xin, const OSSL_FN *r1, const OSSL_FN *r2, int nlen,
+    const OSSL_FN *e, OSSL_FN_CTX *ctx, BN_GENCB *cb, uint32_t c,
+    OSSL_LIB_CTX *libctx);
+
+/*
+ * Calculate the arena payload size that
+ * ossl_fn_rsa_fips186_5_derive_prime() needs.  Returns 0 on
+ * arithmetic overflow or invalid input.
+ */
+size_t ossl_fn_rsa_fips186_5_derive_prime_ctx_size(const OSSL_FN *Y,
+    const OSSL_FN *X, const OSSL_FN *r1, const OSSL_FN *r2, int nlen,
+    const OSSL_FN *e);
 
 #ifdef __cplusplus
 }
