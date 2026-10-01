@@ -136,6 +136,7 @@ void EC_GROUP_free(EC_GROUP *group)
 
     EC_pre_comp_free(group);
     BN_MONT_CTX_free(group->mont_data);
+    OSSL_FN_MONT_CTX_free(group->fn_mont_ctx_ord);
     OSSL_FN_MONT_CTX_free(group->fn_mont_ctx);
     OSSL_FN_free(group->field_fn);
     EC_POINT_free(group->generator);
@@ -160,6 +161,7 @@ void EC_GROUP_clear_free(EC_GROUP *group)
 
     EC_pre_comp_free(group);
     BN_MONT_CTX_free(group->mont_data);
+    OSSL_FN_MONT_CTX_free(group->fn_mont_ctx_ord);
     OSSL_FN_MONT_CTX_free(group->fn_mont_ctx);
     OSSL_FN_clear_free(group->field_fn);
     EC_POINT_clear_free(group->generator);
@@ -249,6 +251,17 @@ int EC_GROUP_copy(EC_GROUP *dest, const EC_GROUP *src)
     dest->fn_mont_ctx = NULL;
     if (src->fn_mont_ctx != NULL
         && (dest->fn_mont_ctx = OSSL_FN_MONT_CTX_dup(src->fn_mont_ctx)) == NULL)
+        return 0;
+
+    /*
+     * The order Montgomery context (OSSL_FN counterpart of mont_data) is
+     * likewise self-contained; duplicate it here in the generic copy path.  A
+     * NULL source (order not yet set, or no OSSL_FN view) leaves the copy NULL.
+     */
+    OSSL_FN_MONT_CTX_free(dest->fn_mont_ctx_ord);
+    dest->fn_mont_ctx_ord = NULL;
+    if (src->fn_mont_ctx_ord != NULL
+        && (dest->fn_mont_ctx_ord = OSSL_FN_MONT_CTX_dup(src->fn_mont_ctx_ord)) == NULL)
         return 0;
 
     /*
@@ -1433,10 +1446,13 @@ int EC_GROUP_have_precompute_mult(const EC_GROUP *group)
 static int ec_precompute_mont_data(EC_GROUP *group)
 {
     BN_CTX *ctx = BN_CTX_new_ex(group->libctx);
+    const OSSL_FN *order_fn;
     int ret = 0;
 
     BN_MONT_CTX_free(group->mont_data);
     group->mont_data = NULL;
+    OSSL_FN_MONT_CTX_free(group->fn_mont_ctx_ord);
+    group->fn_mont_ctx_ord = NULL;
 
     if (ctx == NULL)
         goto err;
@@ -1446,6 +1462,20 @@ static int ec_precompute_mont_data(EC_GROUP *group)
         goto err;
 
     if (!BN_MONT_CTX_set(group->mont_data, group->order, ctx)) {
+        BN_MONT_CTX_free(group->mont_data);
+        group->mont_data = NULL;
+        goto err;
+    }
+
+    /*
+     * Cache the order in OSSL_FN Montgomery form as well, for the constant-time
+     * ECDSA nonce inverse.  The order was just validated as an odd modulus by
+     * BN_MONT_CTX_set(), so OSSL_FN_MONT_CTX_new() only fails on allocation; a
+     * missing OSSL_FN view (order_fn == NULL) is left as a no-cache fallback.
+     */
+    order_fn = bn_get_ossl_fn(group->order);
+    if (order_fn != NULL
+        && (group->fn_mont_ctx_ord = OSSL_FN_MONT_CTX_new(order_fn)) == NULL) {
         BN_MONT_CTX_free(group->mont_data);
         group->mont_data = NULL;
         goto err;
@@ -1546,6 +1576,22 @@ int ossl_ec_group_do_inverse_ord(const EC_GROUP *group, BIGNUM *res,
         return group->meth->field_inverse_mod_ord(group, res, x, ctx);
     else
         return ec_field_inverse_mod_ord(group, res, x, ctx);
+}
+
+int ossl_ec_group_do_inverse_ord_fn(const EC_GROUP *group, OSSL_FN *res,
+    const OSSL_FN *a, OSSL_FN_CTX *ctx)
+{
+    const OSSL_FN *order_fn;
+
+    if (group->meth->field_inverse_mod_ord_fn != NULL)
+        return group->meth->field_inverse_mod_ord_fn(group, res, a, ctx);
+
+    if ((order_fn = bn_get_ossl_fn(group->order)) == NULL) {
+        ERR_raise(ERR_LIB_EC, ERR_R_OSSL_FN_LIB);
+        return 0;
+    }
+    return OSSL_FN_mod_inverse_prime(res, a, order_fn, ctx,
+        group->fn_mont_ctx_ord);
 }
 
 /*-

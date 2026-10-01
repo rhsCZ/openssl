@@ -244,6 +244,17 @@ struct ec_method_st {
      */
     int (*point_get_affine_coords_bytes)(const EC_GROUP *group,
         const EC_POINT *point, unsigned char *x, unsigned char *y, size_t len);
+    /*-
+     * Inverse modulo the order for OSSL_FN operands: the OSSL_FN counterpart of
+     * field_inverse_mod_ord.  Used by the constant-time ECDSA nonce inverse so
+     * the secret operand never becomes a BIGNUM.  A method with a dedicated
+     * constant-time order inverse (e.g. nistz256's assembly addition chain)
+     * sets this; the rest leave it NULL and ossl_ec_group_do_inverse_ord_fn()
+     * falls back to OSSL_FN_mod_inverse_prime() with the group's cached order
+     * Montgomery context.
+     */
+    int (*field_inverse_mod_ord_fn)(const EC_GROUP *group, OSSL_FN *r,
+        const OSSL_FN *a, OSSL_FN_CTX *ctx);
 };
 
 /*
@@ -332,6 +343,15 @@ struct ec_group_st {
     OSSL_FN *field_fn;
     /* data for ECDSA inverse */
     BN_MONT_CTX *mont_data;
+    /*
+     * Montgomery context for the group order, in OSSL_FN form: the OSSL_FN
+     * counterpart of mont_data.  Built alongside mont_data (in
+     * ec_precompute_mont_data() and the nistz256 full initialiser) and passed
+     * to OSSL_FN_mod_inverse_prime() so the constant-time ECDSA nonce inverse
+     * reuses one cached context instead of rebuilding it per signature.  NULL
+     * when the order is absent or has no OSSL_FN view.
+     */
+    OSSL_FN_MONT_CTX *fn_mont_ctx_ord;
 
     /*
      * Precomputed values for speed. The PCT_xxx names match the
