@@ -26,10 +26,10 @@ size_t OSSL_FN_mod_add_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
     const OSSL_FN *b, const OSSL_FN *m)
 {
     size_t tl, own_size, nested_size;
-
-    if (r == NULL || a == NULL || b == NULL || m == NULL)
-        return 0;
     int err = 0;
+
+    if (a == NULL || b == NULL)
+        return 0;
 
     tl = safe_add_size_t(a->dsize > b->dsize ? a->dsize : b->dsize,
         1, &err);
@@ -46,6 +46,11 @@ size_t OSSL_FN_mod_add_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 int OSSL_FN_mod_add(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     const OSSL_FN *m, OSSL_FN_CTX *ctx)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || b == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     const void *token = OSSL_FN_CTX_start(ctx);
     OSSL_FN *t;
     int ret = 0;
@@ -77,6 +82,11 @@ err:
 int OSSL_FN_mod_add_quick(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     const OSSL_FN *m)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || b == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     size_t al = a->dsize;
     size_t bl = b->dsize;
     size_t rl = r->dsize;
@@ -138,7 +148,7 @@ size_t OSSL_FN_mod_sub_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 {
     size_t ml, n_numbers, own_size, mod_a_size, mod_b_size, nested_size;
 
-    if (r == NULL || a == NULL || b == NULL || m == NULL)
+    if (m == NULL)
         return 0;
 
     ml = m->dsize;
@@ -159,6 +169,11 @@ size_t OSSL_FN_mod_sub_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 int OSSL_FN_mod_sub(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     const OSSL_FN *m, OSSL_FN_CTX *ctx)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || b == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     const void *token = OSSL_FN_CTX_start(ctx);
     OSSL_FN *am, *bm, *rr = r;
     int ret = 0;
@@ -207,6 +222,11 @@ err:
 int OSSL_FN_mod_sub_quick(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     const OSSL_FN *m)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || b == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     if (r == m) {
         ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_INVALID_ARGUMENT);
         return 0;
@@ -268,7 +288,7 @@ size_t OSSL_FN_mod_mul_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 {
     size_t tl, own_size, mul_size, mod_size, nested_size;
 
-    if (r == NULL || a == NULL || b == NULL || m == NULL)
+    if (a == NULL || b == NULL)
         return 0;
 
     if (a == b) {
@@ -302,6 +322,11 @@ size_t OSSL_FN_mod_mul_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 int OSSL_FN_mod_mul(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *b,
     const OSSL_FN *m, OSSL_FN_CTX *ctx)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || b == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     const void *token = OSSL_FN_CTX_start(ctx);
     OSSL_FN *t;
     int ret = 0;
@@ -335,7 +360,7 @@ size_t OSSL_FN_mod_sqr_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 {
     size_t tl, own_size, sqr_size, mod_size, nested_size;
 
-    if (r == NULL || a == NULL || m == NULL)
+    if (a == NULL)
         return 0;
     int err = 0;
 
@@ -355,6 +380,11 @@ size_t OSSL_FN_mod_sqr_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 int OSSL_FN_mod_sqr(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *m,
     OSSL_FN_CTX *ctx)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     const void *token = OSSL_FN_CTX_start(ctx);
     OSSL_FN *t;
     int ret = 0;
@@ -376,10 +406,10 @@ size_t OSSL_FN_mod_lshift1_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
     const OSSL_FN *m)
 {
     size_t tl, own_size, nested_size;
-
-    if (r == NULL || a == NULL || m == NULL)
-        return 0;
     int err = 0;
+
+    if (m == NULL)
+        return 0;
 
     tl = safe_add_size_t(m->dsize, 1, &err);
     if (err != 0 || ossl_fn_totalsize(tl) == 0)
@@ -395,6 +425,11 @@ size_t OSSL_FN_mod_lshift1_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 int OSSL_FN_mod_lshift1(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *m,
     OSSL_FN_CTX *ctx)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     const void *token = OSSL_FN_CTX_start(ctx);
     OSSL_FN *t;
     int ret = 0;
@@ -462,6 +497,11 @@ static int mod_lshift_quick(OSSL_FN *r, const OSSL_FN *a, size_t n,
 /* OSSL_FN_mod_lshift1 variant that may be used if a is less than m */
 int OSSL_FN_mod_lshift1_quick(OSSL_FN *r, const OSSL_FN *a, const OSSL_FN *m)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     return mod_lshift_quick(r, a, 1, m);
 }
 
@@ -469,10 +509,10 @@ size_t OSSL_FN_mod_lshift_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
     int n, const OSSL_FN *m)
 {
     size_t ml, own_size, nested_size;
-
-    if (r == NULL || a == NULL || m == NULL)
-        return 0;
     (void)n;
+
+    if (m == NULL)
+        return 0;
 
     ml = m->dsize;
     if (ossl_fn_totalsize(ml) == 0)
@@ -488,6 +528,11 @@ size_t OSSL_FN_mod_lshift_ctx_size(const OSSL_FN *r, const OSSL_FN *a,
 int OSSL_FN_mod_lshift(OSSL_FN *r, const OSSL_FN *a, int n, const OSSL_FN *m,
     OSSL_FN_CTX *ctx)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     const void *token = OSSL_FN_CTX_start(ctx);
     OSSL_FN *ra;
     int ret = 0;
@@ -509,6 +554,11 @@ err:
 int OSSL_FN_mod_lshift_quick(OSSL_FN *r, const OSSL_FN *a, int n,
     const OSSL_FN *m)
 {
+    if (ossl_unlikely(r == NULL || a == NULL || m == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     if (n < 0) {
         ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_INVALID_ARGUMENT);
         return 0;

@@ -33,6 +33,11 @@
 int OSSL_FN_mod_sqrt(OSSL_FN *ret, const OSSL_FN *a, const OSSL_FN *p,
     OSSL_FN_CTX *ctx)
 {
+    if (ossl_unlikely(ret == NULL || a == NULL || p == NULL)) {
+        ERR_raise(ERR_LIB_OSSL_FN, ERR_R_PASSED_NULL_PARAMETER);
+        return 0;
+    }
+
     const void *token = OSSL_FN_CTX_start(ctx);
     int i, j;
     int err = 1;
@@ -374,7 +379,7 @@ end:
 size_t OSSL_FN_mod_sqrt_ctx_size(const OSSL_FN *ret, const OSSL_FN *a,
     const OSSL_FN *p)
 {
-    if (ret == NULL || a == NULL || p == NULL)
+    if (p == NULL)
         return 0;
 
     size_t L = (size_t)p->dsize;
