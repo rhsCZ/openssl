@@ -933,7 +933,7 @@ IF[{- !$disabled{tests} -}]
       PROGRAMS{noinst}=sm4_internal_test
     ENDIF
     IF[{- !$disabled{ec} -}]
-      PROGRAMS{noinst}=ectest ec_internal_test evp_pkey_dhkem_test
+      PROGRAMS{noinst}=ectest ec_internal_test ec_ct_test evp_pkey_dhkem_test
     ENDIF
     IF[{- !$disabled{ecx} -}]
       PROGRAMS{noinst}=curve448_internal_test
@@ -1102,6 +1102,10 @@ IF[{- !$disabled{tests} -}]
     INCLUDE[ec_internal_test]=../include ../crypto/ec ../apps/include
     DEPEND[ec_internal_test]=../libcrypto.a libtestutil.a
 
+    SOURCE[ec_ct_test]=ec_ct_test.c
+    INCLUDE[ec_ct_test]=../include ../crypto/ec ../apps/include
+    DEPEND[ec_ct_test]=../libcrypto.a libtestutil.a
+
     IF[{- !$disabled{ecx} -}]
       SOURCE[curve448_internal_test]=curve448_internal_test.c
       INCLUDE[curve448_internal_test]=.. ../include ../apps/include ../crypto/ec/curve448
@@ -1146,6 +1150,11 @@ IF[{- !$disabled{tests} -}]
     SOURCE[fn_ct_test]=fn_ct_test.c
     INCLUDE[fn_ct_test]=.. ../include ../crypto/fn ../apps/include
     DEPEND[fn_ct_test]=../libcrypto.a libtestutil.a
+
+    PROGRAMS{noinst}=pkey_ct_test
+    SOURCE[pkey_ct_test]=pkey_ct_test.c
+    INCLUDE[pkey_ct_test]=.. ../include ../apps/include
+    DEPEND[pkey_ct_test]=../libcrypto.a libtestutil.a
 
     PROGRAMS{noinst}=fntest
     SOURCE[fntest]=fntest.c
