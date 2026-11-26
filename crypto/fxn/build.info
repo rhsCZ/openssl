@@ -1,0 +1,17 @@
+$LIBCRYPTO=../../libcrypto
+$LIBFIPS=../../providers/libfips.a
+LIBS=$LIBCRYPTO
+
+$COMMON=fxn_err.c fxn_lib.c fxn_ctx.c fxn_intern.c fxn_addsub.c fxn_shift.c fxn_mul.c \
+        fxn_sqr.c fxn_div.c fxn_rand.c fxn_mod.c fxn_gcd.c fxn_mod_inv.c fxn_mont.c \
+        fxn_exp.c fxn_kron.c fxn_sqrt.c fxn_inv_sqrt_2.c fxn_dh_consts.c fxn_prime.c \
+        fxn_prime_consts.c fxn_x931p.c fxn_rsa_fips186_5.c
+
+SOURCE[$LIBCRYPTO]=$COMMON
+IF[{- !$disabled{srp} -}]
+    SOURCE[$LIBCRYPTO]=fxn_srp_consts.c
+ENDIF
+SOURCE[$LIBFIPS]=$COMMON
+
+DEPEND[fxn_prime.o]=../bn/bn_prime.h
+DEPEND[fxn_prime_consts.o]=../bn/bn_prime.h
